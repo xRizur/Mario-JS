@@ -10,6 +10,8 @@ export default class GameScene extends Phaser.Scene {
   private platformGroup!: Phaser.Physics.Arcade.StaticGroup
   private enemyGroup!: Phaser.Physics.Arcade.Group
   private coinGroup!: Phaser.Physics.Arcade.Group
+  private bulletGroup!: Phaser.Physics.Arcade.Group;
+  private birdGroup!: Phaser.Physics.Arcade.Group;
 
   private player!: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys
@@ -53,6 +55,13 @@ export default class GameScene extends Phaser.Scene {
     this.platformGroup = this.physics.add.staticGroup()
     this.enemyGroup = this.physics.add.group()
     this.coinGroup = this.physics.add.group()
+    // GRUPA NA POCISKI
+    this.bulletGroup = this.physics.add.group({
+      classType: Phaser.Physics.Arcade.Sprite,
+      runChildUpdate: true,
+    });
+    // GRUPA NA PTAKI
+    this.birdGroup = this.physics.add.group();
 
     // GENEROWANIE POZIOMU
     this.generateLevel()
@@ -76,7 +85,14 @@ export default class GameScene extends Phaser.Scene {
       frames: [{ key: 'player', frame: 0 }],
       frameRate: 20
     })
-
+    this.physics.add.overlap(
+      this.bulletGroup,
+      this.enemyGroup,
+      this.hitEnemyWithBullet,
+      undefined,
+      this
+    );
+    
     this.cursors = this.input.keyboard.createCursorKeys()
 
     // KOLIZJE
@@ -84,6 +100,8 @@ export default class GameScene extends Phaser.Scene {
     this.physics.add.collider(this.coinGroup, this.platformGroup)
     this.physics.add.overlap(this.player, this.enemyGroup, this.hitEnemy, undefined, this)
     this.physics.add.overlap(this.player, this.coinGroup, this.collectCoin, undefined, this)
+    this.physics.add.overlap(this.player, this.birdGroup, this.hitBird, undefined, this);
+    this.physics.add.collider(this.birdGroup, this.platformGroup, this.bounceBird, undefined, this);
 
     // HUD
     this.scoreText = this.add.text(16, 16, `Score: ${this.score}`, { fontSize: '18px' })
@@ -123,7 +141,14 @@ export default class GameScene extends Phaser.Scene {
     if (this.player.x > this.sceneWidth - 40) {
       this.nextLevel();
     }
-  
+    
+    if (this.input.keyboard.checkDown(this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE), 200)) {
+      if (this.lives > 2) {
+        this.shootBullet();
+      }
+    }
+    
+    
     // -- Logika wrogów: odwracanie na krawędzi platformy --
     this.enemyGroup.getChildren().forEach((enemyObj) => {
       const enemy = enemyObj as Phaser.Physics.Arcade.SpriteWithDynamicBody;
@@ -167,6 +192,22 @@ export default class GameScene extends Phaser.Scene {
         coin.destroy();
       }
     });
+    this.birdGroup.getChildren().forEach((birdObj) => {
+      const bird = birdObj as Phaser.Physics.Arcade.Sprite;
+    
+      // Pobierz stałą wysokość lotu z danych ptaka
+      const fixedHeight = bird.getData('fixedHeight');
+      if (fixedHeight !== undefined) {
+        bird.setY(fixedHeight); // Ustaw ptaka na stałej wysokości
+      }
+    
+      // Usuń ptaka, jeśli znajdzie się poza ekranem
+      if (bird.x < -50 || bird.x > this.sceneWidth + 50) {
+        bird.destroy();
+      }
+    });
+    
+    
   }
   
 
@@ -271,7 +312,23 @@ export default class GameScene extends Phaser.Scene {
         coin.setBounce(0);
         coin.setCollideWorldBounds(true, true, true, false);
       }
+      // Generowanie ptaków z 30% szans
+      if (Phaser.Math.Between(1, 100) <= 30) {
+        const birdX = segX;
+        const birdY = Phaser.Math.Between(minY - 150, minY - 250); // Losowa wysokość powyżej najniższej platformy
+        const bird = this.birdGroup.create(birdX, birdY, 'bird');
+      
+        // Nadajemy właściwości ptakom
+        bird.setCollideWorldBounds(true);
+        bird.setBounceX(1); // Odbijają się od granic świata w poziomie
+        bird.setVelocityX(Phaser.Math.Between(-100, 100)); // Ruch poziomy
+        bird.setGravityY(0); // Wyłączamy grawitację
+        bird.setData('fixedHeight', birdY); // Zapisujemy wysokość jako stałą wartość
+      }
+      
+      
     }
+    
 
     // Dodawanie pozostałych wrogów z poprzedniego poziomu
     for (let i = 0; i < this.remainingEnemies; i++) {
@@ -324,7 +381,37 @@ export default class GameScene extends Phaser.Scene {
   }
   
   
-
+  private shootBullet() {
+    // Tworzenie pocisku
+    const bullet = this.bulletGroup.create(this.player.x, this.player.y, 'bullet');
+    if (!bullet) return;
+  
+    bullet.setActive(true);
+    bullet.setVisible(true);
+  
+    // Nadajemy prędkość pociskowi
+    bullet.body.velocity.x = this.player.flipX ? -300 : 300;
+  
+    // Usuwamy pocisk po wyjściu poza ekran
+    bullet.body.checkWorldBounds = true;
+    bullet.body.outOfBoundsKill = true;
+  }
+  private hitEnemyWithBullet(
+    bulletObj: Phaser.GameObjects.GameObject,
+    enemyObj: Phaser.GameObjects.GameObject
+  ) {
+    const bullet = bulletObj as Phaser.Physics.Arcade.Sprite;
+    const enemy = enemyObj as Phaser.Physics.Arcade.Sprite;
+  
+    // Dezaktywuj pocisk i wróg
+    bullet.disableBody(true, true);
+    enemy.disableBody(true, true);
+  
+    // Zwiększ wynik za pokonanie wroga
+    this.score += 20;
+    this.scoreText.setText(`Score: ${this.score}`);
+  }
+  
   private hitEnemy(
     playerObj: Phaser.GameObjects.GameObject,
     enemyObj: Phaser.GameObjects.GameObject
@@ -351,6 +438,23 @@ export default class GameScene extends Phaser.Scene {
       this.loseLife()
     }
   }
+  private hitBird(
+    playerObj: Phaser.GameObjects.GameObject,
+    birdObj: Phaser.GameObjects.GameObject
+  ) {
+    const bird = birdObj as Phaser.Physics.Arcade.Sprite;
+    const player = playerObj as Phaser.Physics.Arcade.Sprite;
+  
+    // Jeśli gracz skacze na ptaka, ptak ginie
+    if (player.body.velocity.y > 0) {
+      bird.disableBody(true, true);
+      player.setVelocityY(-200); // Odbicie gracza w górę
+      this.score += 30; // Więcej punktów za ptaka
+      this.scoreText.setText(`Score: ${this.score}`);
+    } else {
+      this.loseLife(); // Gracz traci życie, jeśli dotknie ptaka w inny sposób
+    }
+  }
   
 
   private loseLife() {
@@ -372,4 +476,13 @@ export default class GameScene extends Phaser.Scene {
       this.player.setVelocity(0)
     }
   }
+
+  private bounceBird(
+    birdObj: Phaser.GameObjects.GameObject,
+    platformObj: Phaser.GameObjects.GameObject
+  ) {
+    const bird = birdObj as Phaser.Physics.Arcade.Sprite;
+    bird.setVelocityY(-Phaser.Math.Between(50, 100)); // Odbicie w górę przy zderzeniu
+  }
+  
 }
